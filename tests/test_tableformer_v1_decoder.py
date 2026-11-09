@@ -3,6 +3,7 @@ The batched TableFormer v1 decoder (TagDecoder) against the previous token-by-to
 decoding loop of TableModel04_rs.predict, kept here as the reference.
 """
 
+import json
 import os
 
 import cv2
@@ -170,3 +171,26 @@ def test_cuda_graph_matches_eager(predictor, images):
     eager_seqs, eager_hidden = eager.decode(memory, 1024)
     assert seqs == eager_seqs
     assert torch.allclose(hidden, eager_hidden, atol=1e-5)
+
+
+def test_multi_table_predict_matches_single_tables(predictor):
+    # Both tables of the page go through the model together; each must come out as
+    # if it had been predicted on its own
+    with open(
+        "./tests/test_data/samples/ADS.2007.page_123.png_iocr.parse_format.json"
+    ) as fp:
+        page = json.load(fp)["pages"][0]
+    page["image"] = cv2.imread("./tests/test_data/samples/ADS.2007.page_123.png")
+    bboxes = [bbox for png, bbox in TABLES if "ADS" in png]
+
+    together = predictor.multi_table_predict(page, [list(b) for b in bboxes])
+    for bbox, output in zip(bboxes, together):
+        alone = predictor.multi_table_predict(page, [list(bbox)])[0]
+        assert (
+            output["predict_details"]["prediction"]["tag_seq"]
+            == (alone["predict_details"]["prediction"]["tag_seq"])
+        )
+        assert len(output["tf_responses"]) == len(alone["tf_responses"])
+        for a, b in zip(output["tf_responses"], alone["tf_responses"]):
+            assert a["row_span"] == b["row_span"] and a["col_span"] == b["col_span"]
+            assert a["text_cell_bboxes"] == b["text_cell_bboxes"]
